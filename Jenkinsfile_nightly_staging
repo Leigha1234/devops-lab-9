@@ -1,0 +1,30 @@
+pipeline {
+    agent any
+
+    environment {
+        // Define reusable variables
+        REPO_URL = 'YOUR_GITHUB_REPO'
+        REPO_BRANCH = 'main'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                git branch: 'main', url: 'YOUR_REPO_URL'
+            }
+        }
+
+        stage{'Provision Staging'}{
+            // Look at the ansible plugin documentation for how to run an ansible playbook from a Jenkins pipeline
+            steps {
+                // Ansible plugin code goes here
+            }
+        }
+
+        stage{'Deploy to Staging'}{
+            steps {
+                // Ansible plugin code goes here to run the deployment playbook
+            }
+        }
+    }
+}

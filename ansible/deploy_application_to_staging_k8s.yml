@@ -1,0 +1,83 @@
+- name: Ensure staging instances are running and inventory is updated
+  hosts: localhost
+  gather_facts: no
+  vars:
+    instance_name: Flask_Running_App_Staging
+    region: us-east-1
+    group: ec2_staging
+
+  tasks:
+    - name: Gather facts to check if the staging instance already exists
+      ec2_instance_info:
+        region: "{{ region }}"
+        filters:
+          instance-state-name: running
+          tag:Name: "{{ instance_name }}"
+      register: ec2_exists
+
+    - name: Fail if no running instances are found
+      fail:
+        msg: "No running staging instances found. Please provision the staging environment."
+      when: ec2_exists.instances | length == 0
+
+    - name: Update inventory with dynamic public IPs
+      add_host:
+        name: "{{ item.public_ip_address }}"
+        groups: "{{ group }}"
+      loop: "{{ ec2_exists.instances }}"
+      when: item.public_ip_address is defined
+
+- name: Deploy Application on Staging Instance
+  vars:
+    remote_ec2_user: ubuntu
+    group: ec2_staging
+  hosts: "{{ group }}"
+  remote_user: "{{ remote_ec2_user }}"
+  become: yes
+  become_method: sudo
+
+  tasks:
+
+  # copy k8s-configmap.yaml file to k8s
+  # TODO: Create an ansible copy task to copy the k8s-configmap.yaml file to the home/ubuntu directory on the staging instance
+  - name: Copy k8s-configmap.yaml file
+    # TODO: Add the copy task here
+    ansible.builtin.copy:
+      src: ../k8s-configmap.yaml
+      dest: /home/ubuntu/k8s-configmap.yaml
+      mode: '0644'
+
+  - name: Apply k8s-configmap.yaml file
+    kubernetes.core.k8s:
+        state: present
+        namespace: default
+        src: /home/ubuntu/k8s-configmap.yaml
+
+  # copy k8s-deployment.yaml file to k8s
+  # TODO : Create an ansible copy task to copy the k8s-deployment.yaml file to the home/ubuntu directory on the staging instance
+  - name : Copy k8s-deployment.yaml file
+    ansible.builtin.copy:
+      src: ../k8s-deployment.yaml
+      dest: /home/ubuntu/k8s-deployment.yaml
+      mode: '0644'
+
+  - name: Apply k8s-deployment.yaml file
+    kubernetes.core.k8s:
+        state: present
+        namespace: default
+        src: /home/ubuntu/k8s-deployment.yaml
+
+
+  # copy k8s-service.yaml file to k8s
+  # TODO: Create an ansible copy task to copy the k8s-service.yaml file to the home/ubuntu directory on the staging instance
+  - name : Copy k8s-service.yaml file
+    ansible.builtin.copy:
+      src: ../k8s-service.yaml
+      dest: /home/ubuntu/k8s-service.yaml
+      mode: '0644'
+
+  - name: Apply k8s-service.yaml file
+    kubernetes.core.k8s:
+        state: present
+        namespace: default
+        src: /home/ubuntu/k8s-service.yaml
