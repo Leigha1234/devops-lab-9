@@ -1,19 +1,19 @@
-- name: Stage 1 - Launch Staging EC2 Instance
+---
+- name: Stage 1 - Launch or Find Staging EC2 Instance
   hosts: localhost
   connection: local
-  # variables to be used in the playbook - making it easier to change values
   vars:
     instance_name: Flask_Running_App_Staging
     key_name: flask_running_app_staging_key
-    instance_type: t2.small
-    security_group: flask_running_app_staging_sg
+    instance_type: t2.medium
+    security_group: staging_sg  # Updated to match your AWS screenshot
     image_id: ami-0866a3c8686eaeeba
     region: us-east-1
-    volume_size: 16
+    volume_size: 32
 
   tasks:
-    - name: Launch T2 small instance on EC2
-      ec2_instance:
+    - name: Launch T2 medium instance on EC2
+      amazon.aws.ec2_instance:
         name: "{{ instance_name }}"
         key_name: "{{ key_name }}"
         instance_type: "{{ instance_type }}"
@@ -26,7 +26,6 @@
             ebs:
               volume_size: "{{ volume_size }}"
               delete_on_termination: true
-
       register: flask_running_app_staging_instance
 
     - name: Add new instance to host group via its public IP address
@@ -53,45 +52,38 @@
 
   tasks:
     # --------- Setup DuckDNS on the staging instance ---------
-    # Setup duckdns client to update the public IP address of the staging instance with the duckdns service
     - name: Ensure curl is installed
-      become: yes
       package:
         name: curl
         state: present
 
     - name: Create duckdns directory
       file:
-        path: "~/duckdns"
+        path: "/home/{{ remote_ec2_user }}/duckdns"
         state: directory
         mode: '0755'
+        owner: "{{ remote_ec2_user }}"
 
     - name: Create the duck.sh script
       copy:
-        dest: "~/duckdns/duck.sh"
+        dest: "/home/{{ remote_ec2_user }}/duckdns/duck.sh"
         mode: '0700'
+        owner: "{{ remote_ec2_user }}"
         content: |
           #!/bin/bash
-          echo url="https://www.duckdns.org/update?domains={{ duckdns_domain }}&token={{ duckdns_api_token }}&ip=" | curl -k -o ~/duckdns/duck.log -K -
+          echo url="https://www.duckdns.org/update?domains={{ duckdns_domain }}&token={{ duckdns_api_token }}&ip=" | curl -k -o /home/{{ remote_ec2_user }}/duckdns/duck.log -K -
 
     - name: Create the cron job to run every 5 minutes
       cron:
         name: "DuckDNS Update"
         minute: "*/5"
-        job: "~/duckdns/duck.sh >/dev/null 2>&1"
+        user: "{{ remote_ec2_user }}"
+        job: "/home/{{ remote_ec2_user }}/duckdns/duck.sh >/dev/null 2>&1"
 
     - name: Run the script for the first time
-      command: "~/duckdns/duck.sh"
+      become_user: "{{ remote_ec2_user }}"
+      command: "/home/{{ remote_ec2_user }}/duckdns/duck.sh"
       changed_when: true
-
-    - name: Read the duck.log file
-      slurp:
-        src: "~/duckdns/duck.log"
-      register: duck_log_content
-
-    - name: Display the DuckDNS log result
-      debug:
-        msg: "DuckDNS response: {{ duck_log_content['content'] | b64decode }}"
 
     # --------- Install Docker on the staging instance ---------
     - name: Add the Docker GPG key
@@ -126,26 +118,27 @@
       apt:
         name: python3-kubernetes
         state: present
-      become: yes
 
-    # TODO: Add the correct shell commands to install Minikube and kubectl
-
+    # --------- Install Minikube and kubectl ---------
     - name: Download Minikube
-      shell: curl -LO https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64
+      get_url:
+        url: https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64
+        dest: /home/{{ remote_ec2_user }}/minikube-linux-amd64
+        mode: '0755'
 
     - name: Install Minikube
-      become: yes
-      shell: install minikube-linux-amd64 /usr/local/bin/minikube && rm minikube-linux-amd64
+      shell: install /home/{{ remote_ec2_user }}/minikube-linux-amd64 /usr/local/bin/minikube && rm /home/{{ remote_ec2_user }}/minikube-linux-amd64
 
     - name: Download kubectl
       shell: curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
 
     - name: Install kubectl
-      become: yes
       shell: install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
 
     - name: Start Minikube
-      shell: minikube start --extra-config=kubeadm.ignore-preflight-errors=NumCPU --force --cpus 1
+      become_user: "{{ remote_ec2_user }}"
+      shell: minikube start --driver=docker --force
+      register: minikube_start
 
 - name: Stage 3 - Verify DuckDNS resolution from Localhost
   hosts: localhost
@@ -156,15 +149,13 @@
         ec2_ip: "{{ flask_running_app_staging_instance.instances[0].public_ip_address }}"
 
     - name: Check what IP DuckDNS is pointing to
-      # This waits until the DNS matches the EC2 IP
       shell: "dig +short {{ duckdns_domain }}.duckdns.org"
       register: dns_ip
       until: dns_ip.stdout == ec2_ip
-      retries: 10
-      delay: 10
+      retries: 15
+      delay: 20
       changed_when: false
 
     - name: Final Result
       debug:
         msg: "Success! {{ duckdns_domain }}.duckdns.org is now pointing to {{ ec2_ip }}"
-
